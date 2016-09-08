@@ -1,23 +1,37 @@
 @Grab('org.apache.spark:spark-core_2.11:2.0.0')
+@Grab('org.apache.spark:spark-yarn_2.11:2.0.0')
+@Grab('log4j:log4j:1.2.17')
 import org.apache.spark.api.java.*
 import org.apache.spark.SparkConf
 import org.apache.spark.api.java.function.Function
 import scala.collection.JavaConversions
+import groovy.util.logging.Log4j
+import org.apache.log4j.*
+import org.apache.spark.deploy.SparkSubmit
 
+Logger log = Logger.getInstance(getClass())
+log.root.level = Level.DEBUG
+log.root.addAppender(new ConsoleAppender(new PatternLayout("%d{yy/MM/dd HH:mm:ss} %p %c{1}: %m%n")))
+
+@Log4j
 class SimpleApp {
   static main(args) {
-     
-    def logFile = "/Users/larluo/work/git/groovy-example/groovy-deps/README.md"
-    def conf = new SparkConf ()
-    conf.setAll(JavaConversions.mapAsScalaMap(["spark.master":conf.get("spark.master", "local[*]")] + ["spark.app.name":"Simple Application"]))
-    def sc = new JavaSparkContext (conf)
-    def logData = sc.textFile (logFile).cache ()
 
-    println (
-      logData.filter{ it.contains("a") }.count ()
+    log.info "main method is running..."
+    def sc = new JavaSparkContext (new SparkConf())
+    sc.hadoopConfiguration().with {
+        it.set("mapreduce.input.fileinputformat.input.dir.recursive", "true")
+        it.set("yarn.resourcemanager.hostname", "192.168.1.3")
+    }
+    println(
+      sc.textFile("hdfs://192.168.1.3:9000/user/hive/warehouse/stg.db/d_bolome_product_category")
+      .first()
     )
-
-    def data = [1, 2, 3, 4, 5]
-    println(sc.parallelize([1, 2, 3, 4, 5]).reduce{a,b -> a + b}.collect())
   }
 }
+
+SparkSubmit.main(["--name", "Simple Application", 
+                  // "--master", "local[*]", 
+                  "--master", "yarn", "--deploy-mode", "cluster", 
+                  "--class", "SimpleApp",
+                  "spark-internal"] as String[])
