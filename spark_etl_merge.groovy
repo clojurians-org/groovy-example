@@ -18,7 +18,9 @@ import java.security.CodeSource
 import org.codehaus.groovy.control.CompilerConfiguration
 import org.codehaus.groovy.control.CompilationUnit
 
-import org.apache.spark.api.java.*
+import org.apache.hadoop.conf.Configuration
+import org.apache.hadoop.hdfs.DFSClient
+import org.apache.spark.api.java.JavaSparkContext
 import org.apache.spark.SparkConf
 import org.apache.spark.deploy.SparkSubmit
 import scala.Tuple2
@@ -30,6 +32,7 @@ import org.apache.log4j.Level
 import org.apache.log4j.ConsoleAppender
 import org.apache.log4j.PatternLayout
 import org.apache.log4j.DailyRollingFileAppender
+
 
 def (job_id) = ["spark-etl.merge"]
 
@@ -53,7 +56,7 @@ log.root.with {
     )
 */
 }
-log.info "\n\n\n"
+3.times {log.info ""}
 
 /**********************************
  * CLASS LOADER SETUP
@@ -88,43 +91,63 @@ new MyGroovyClassLoader().with {
  * SPARK CODE
  **********************************/
 class Merge {
+  static log = Logger.getInstance(Merge.class)
+  static list_dirs(dfs_client, filepath) {
+      dfs_client.listPaths(filepath).getPartialListing().grep{it.dir}*.getFullName(filepath)
+  }
+  static list_leaf_dirs (dfs_client, filepath) {
+      list_dirs(dfs_client, filepath).with {it ? it.collect{subDir -> list_leaf_dirs(dfs_client, subDir)}.flatten() : [filepath]} ?: filepath
+  }
   static main(args) {
+    // 1. PARSE PARAMETER
+    def (tabname, prt_cols_str) = args
+    def merge_cols_idx = Eval.me(prt_cols_str)*.get(1)
+    def (default_fs, username, uuid, hive_dir) = ["hdfs://192.168.1.3:9000", System.getProperty("user.name"), UUID.randomUUID(), "user/hive/warehouse"]
+    log.info "params:" +  [tabname: tabname, merge_cols_idx: merge_cols_idx, uuid: uuid]
+
+    // 2. RUN SPARK
     def sc = new JavaSparkContext (
         new SparkConf().with {
             it.setAll(JavaConversions.mapAsScalaMap(
                 ["spark.app.name":"spark-etl.merge",
                  "spark.hadoop.mapreduce.input.fileinputformat.input.dir.recursive": "true",
                  "spark.hadoop.yarn.resourcemanager.hostname": "192.168.1.3",
-                 "spark.hadoop.fs.defaultFS": "hdfs://192.168.1.3:9000"]
+                 "spark.hadoop.fs.defaultFS": default_fs]
             ))
         it}
     )
-    def stgRdd = sc.wholeTextFiles("hdfs://192.168.1.3:9000/user/hive/warehouse/stg.db/d_bolome_product_category")
+    def stgRdd = sc.wholeTextFiles("/${hive_dir}/stg.db/${tabname}")
                    .flatMapToPair{
-                       it._2.split("\n").drop(1)
-                            .collect{
-                              def fields = it.split(",")
-                              new Tuple2(fields.first(), fields.join("\001"))
-                            }.iterator()
+                     it._2.split("\n").drop(1).collect{it.split(",").with { new Tuple2(it[merge_cols_idx], it.join("\001")) }}.iterator()
                    }
-    def odsRdd  = sc.wholeTextFiles("hdfs://192.168.1.3:9000/user/hive/warehouse/ods.db/d_bolome_product_category")
-                   .flatMapToPair{
-                       it._2.split("\n").drop(1)
-                            .collect{
-                               new Tuple2(it.split("\001").first(), it)
-                            }.iterator()
-                   }
+    def odsRdd  = sc.wholeTextFiles("/${hive_dir}/ods.db/${tabname}")
+                    .flatMapToPair{
+                      it._2.split("\n").collect{ new Tuple2(it.split("\001")[merge_cols_idx], it) }.iterator()
+                    }
 
-      stgRdd.fullOuterJoin(odsRdd).map{
-        it._2._1.orNull() ?: it._2._2.orNull()
-      }.saveAsTextFile("hdfs://192.168.1.3:9000/user/.hive/warehouse/ods.db/d_bolome_product_category")
+    stgRdd.fullOuterJoin(odsRdd).map{
+      it._2._1.orNull() ?: it._2._2.orNull()
+    }.saveAsTextFile("${uuid}/${hive_dir}/ods.db/${tabname}")
 
+    // 3. PERSIST DATA
+    def dfs_client = new DFSClient(new URI(default_fs), new Configuration())
+    list_leaf_dirs(dfs_client, "/user/${username}/${uuid}/${hive_dir}/ods.db/${tabname}").each {
+        def tgt_path=it.replaceAll("^/user/${username}/${uuid}", "")
+        log.info "persist to directory: ${tgt_path}"
+        dfs_client.delete(tgt_path)
+        dfs_client.rename(it, tgt_path)
+    }
+    dfs_client.delete("/user/${username}/${uuid}")
   }
 }
 
+def (tabname, merge_cols_str) = args
+// def (tabname, merge_cols_str) = ['d_bolome_product_category',  '[[":p_date", 0]]']
 SparkSubmit.main(
     ["--master", "yarn", 
      "--deploy-mode", "client", 
      "--class", "Merge",
-     jar_path
+     "--jars", "/home/spiderdt/work/git/spiderdt-release/target/groovy-all-2.4.7.jar",
+     jar_path,
+     tabname, merge_cols_str
     ] as String[])
