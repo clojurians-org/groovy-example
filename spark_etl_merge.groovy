@@ -122,7 +122,7 @@ SparkSubmit.main(
      "--deploy-mode", "client", 
      "--class", "Client",
      "--jars", "/home/spiderdt/work/git/spiderdt-release/data-platform/target/groovy-all-2.4.7.jar",
-     "--executor-memory", "4g",
+     "--executor-memory", "2g",
      jar_path,
      tabname, merge_cols_str
     ] as String[])
