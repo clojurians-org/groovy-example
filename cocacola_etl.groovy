@@ -1,8 +1,9 @@
 #! /bin/groovy -Dgroovy.grape.report.downloads=true -Divy.message.logger.level=1
 
-@Grapes([
-    @Grab('org.apache.poi:poi:3.15'),
-    @Grab('org.apache.poi:poi-ooxml:3.15')])
+@Grab('org.apache.poi:poi:3.15')
+@Grab('org.apache.poi:poi-ooxml:3.15')
+@Grab('mysql:mysql-connector-java:6.0.3')
+
 
 import org.apache.poi.xssf.usermodel.XSSFWorkbook
 import static org.apache.poi.ss.usermodel.Cell.*
@@ -12,11 +13,14 @@ import java.nio.file.Paths
 import groovy.time.TimeCategory
 
 import static groovy.json.JsonOutput.toJson
+import groovy.sql.Sql
+
+getClass().classLoader.rootLoader.addURL(new URL("file:///home/spiderdt/.m2/repository/mysql/mysql-connector-java/6.0.3/mysql-connector-java-6.0.3.jar"))
 
 def parse_xls(xls_path, sheetname) {
   Paths.get(xls_path).withInputStream { input ->
     def score_sheet = new XSSFWorkbook(input).getSheet(sheetname)
-    def header = score_sheet.getRow(0).cellIterator().collect{it.stringCellValue}.takeWhile{it != "_"}
+    def header = score_sheet.getRow(0).cellIterator()*.stringCellValue.takeWhile{it != "_"}
     [["bottler_cn", "bottler_en", *header], 
      score_sheet.rowIterator().drop(3).collect{ 
         it.cellIterator().collect{ [(it.cellTypeEnum in  [CellType.NUMERIC]) ? it.numericCellValue.toString() : it.stringCellValue, it.address.column] }
@@ -76,10 +80,18 @@ def cal_expr(dataset, exprs) {
     ret
 }
 
-def to_mysql(category_map) {
-  category_map.take(2).each {category_name, category_val ->
-    category_val.each {filter_name, filter_val ->
-      println([category_name: toJson(category_name), filter_name: toJson(filter_name), json: toJson(filter_val) ])
+def to_mysql(category_map, mysql_info) {
+  Sql.loadDriver('com.mysql.cj.jdbc.Driver')
+  println("[info] writing to mysql...")
+  def sql = Sql.newInstance(mysql_info)
+  sql.execute "CREATE TABLE IF NOT EXISTS cocacola_rpt ( name VARCHAR(64), category VARCHAR(1000), filter VARCHAR(1000), data VARCHAR(10000) );"
+
+  sql.withBatch(100, "REPLACE INTO cocacola_rpt(name, category, filter, data) VALUES('score', ?, ?, ?)") {
+    category_map.take(2).each {category, filter_map->
+      filter_map.each {filter, data ->
+        println("insert:" + [category: category, filter: filter, data: data])
+        it.addBatch(toJson(category), toJson(filter), toJson(data)) 
+      }
     }
   }
 }
@@ -87,12 +99,27 @@ def to_mysql(category_map) {
 def cocacola_xls = "/home/spiderdt/work/git/spiderdt-working/larluo/score.xlsm"
 
 // date, bottler_group, bottler, channel, kpi, score, score_pp, score_lp
-def exprs = [ //[filter : [[":date", 0], [":bottler_group", 1], [":bottler", 2]], dimension : [["Total", 3], ["Total", 4]], metrics : [[":score", 5], [":score_pp", 6], [":score_lp", 7]]],
-              [filter : [[":date", 0], [":bottler_group", 1], [":bottler", 2]], dimension : [[":channel", 3], ["Total", 4]], metrics : [[":score", 5]]], 
-              //[filter : [[":date", 0], [":bottler_group", 1], [":bottler", 2]], dimension : [["Total", 3], [":kpi", 4]], metrics : [[":score", 5]]], 
-              //[filter : [[":date", 0], [":bottler_group", 1], [":bottler", 2]], dimension : [[":channel", 3], ["Total", 4], [":bottler", 2]], metrics : [[":score", 5]]], 
-              //[filter : [[":date", 0], [":bottler_group", 1], [":bottler", 2]], dimension : [["Total", 3], [":kpi", 4], [":bottler", 2]], metrics : [[":score", 5]]] 
+def exprs = [ [filter : [[":date", 0], [":bottler_group", 1], [":bottler", 2]], 
+               dimension : [["Total", 3], ["Total", 4]], 
+               metrics : [[":score", 5], [":score_pp", 6], [":score_lp", 7]]],
+              [filter : [[":date", 0], [":bottler_group", 1], [":bottler", 2]], 
+               dimension : [[":channel", 3], ["Total", 4]], 
+               metrics : [[":score", 5]]], 
+              [filter : [[":date", 0], [":bottler_group", 1], [":bottler", 2]], 
+               dimension : [["Total", 3], [":kpi", 4]], 
+               metrics : [[":score", 5]]], 
+              [filter : [[":date", 0], [":bottler_group", 1], [":bottler", 2]], 
+               dimension : [[":channel", 3], ["Total", 4], [":bottler", 2]], 
+               metrics : [[":score", 5]]], 
+              [filter : [[":date", 0], [":bottler_group", 1], [":bottler", 2]], 
+               dimension : [["Total", 3], [":kpi", 4], [":bottler", 2]], 
+               metrics : [[":score", 5]]] 
             ]
+def mysql_info = [url: "jdbc:mysql://192.168.1.2:3306/state_store?useSSL=false",
+                  user: "state_store",
+                  password: "spiderdt",
+                  driver: "com.mysql.cj.jdbc.Driver"
+                  ]
 def bottler_group = [China : ['China'],
                      BIG: ['BIG','LNS','GX','YN','Shanxi','LNN','SH','HB','SC','CQ','HLJ','JL'],
                      CBL: ['CBL','HaiN','BJ','ZM','SD','HeB','JX','TJ','HuN','InnM','GS','XJ'],
@@ -104,4 +131,4 @@ cocacola_xls.with{ parse_xls(it, "score") }
             .with{ lookup_cols(it) }
             .with{ explode_cols(it, bottler_group) }
             .with{ cal_expr(it, exprs) }
-            .with{ to_mysql(it) }
+            .with{ to_mysql(it, mysql_info) }
