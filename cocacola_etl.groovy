@@ -66,9 +66,9 @@ def cal_expr(dataset, exprs) {
         // println("row:" + row)
         exprs.each {
             if(it['dimension'].grep{it[0][0] != ':'}.every{ row[it[1]] == it[0] }) {
-                def rpt_category =  it['dimension'].grep{it[0][0] == ':'}
-                def filter_val = it['filter'].collect{row[it[1]]}
-                def dimension_val = it['dimension'].grep{it[0][0] == ':'}.collectEntries{[it[0].drop(1), row[it[1]]]}
+                def rpt_category =  it['dimension'].grep{it[0][0] == ':'}.collect{[it[0].drop(1), it[1]]}
+                def filter_val = it['filter'].collect{[it[0].drop(1), row[it[1]]]}
+                def dimension_val = it['dimension'].grep{it[0][0] == ':'}.collect{[it[0].drop(1), row[it[1]]]}
                 def metrics_val = it['metrics'].collectEntries{[it[0].drop(1), row[it[1]]]}
 
                 def filter_map = [(filter_val): (ret?.get(rpt_category)?.get(filter_val) ?: []) + [[dimension: dimension_val, metrics_val: metrics_val]]]
@@ -80,17 +80,29 @@ def cal_expr(dataset, exprs) {
     ret
 }
 
+def tree(data) {
+  data.groupBy{it.size() == 1}.collectEntries {
+    it.key ? [items : it.value.collectMany{it}] : it.value.groupBy{it[0]}.collectEntries { [it.key, tree(it.value*.drop(1))] }
+  }
+}
+
 def to_mysql(category_map, mysql_info) {
-  Sql.loadDriver('com.mysql.cj.jdbc.Driver')
   println("[info] writing to mysql...")
   def sql = Sql.newInstance(mysql_info)
-  sql.execute "CREATE TABLE IF NOT EXISTS cocacola_rpt ( name VARCHAR(64), category VARCHAR(1000), filter VARCHAR(1000), data VARCHAR(10000) );"
+  sql.execute """CREATE TABLE IF NOT EXISTS cocacola_rpt ( 
+                   name VARCHAR(64), 
+                   category VARCHAR(256), 
+                   filter VARCHAR(512), 
+                   data VARCHAR(10000),
+                   CONSTRAINT pk_rpt PRIMARY KEY(name, category, filter)
+                 ) ;"""
 
   sql.withBatch(100, "REPLACE INTO cocacola_rpt(name, category, filter, data) VALUES('score', ?, ?, ?)") {
-    category_map.take(2).each {category, filter_map->
+    category_map.each {category, filter_map->
       filter_map.each {filter, data ->
-        println("insert:" + [category: category, filter: filter, data: data])
-        it.addBatch(toJson(category), toJson(filter), toJson(data)) 
+        def tree_data = tree(data.collect{it.dimension + it.metrics_val})
+        println("insert:" + [category: category, filter: filter, data: tree_data])
+        it.addBatch(toJson(category), toJson(filter), toJson(tree_data)) 
       }
     }
   }
