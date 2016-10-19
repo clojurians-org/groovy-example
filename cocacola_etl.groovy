@@ -9,30 +9,99 @@ import static org.apache.poi.ss.usermodel.Cell.*
 import org.apache.poi.ss.usermodel.CellType
 
 import java.nio.file.Paths
+import groovy.time.TimeCategory
+
+import static groovy.json.JsonOutput.toJson
 
 def parse_xls(xls_path, sheetname) {
   Paths.get(xls_path).withInputStream { input ->
     def score_sheet = new XSSFWorkbook(input).getSheet(sheetname)
     def header = score_sheet.getRow(0).cellIterator().collect{it.stringCellValue}.takeWhile{it != "_"}
-    score_sheet.rowIterator().drop(3).collect {row ->
-      row.cellIterator().collect{ [it, it.address.column] }.dropWhile{it[1] < 2}.collect {cell, idx ->
-        [row.getCell(1).stringCellValue, header[idx - 2], (cell.cellTypeEnum in  [CellType.NUMERIC]) ? cell.numericCellValue : cell.stringCellValue]
+    [["bottler_cn", "bottler_en", *header], 
+     score_sheet.rowIterator().drop(3).collect{ 
+        it.cellIterator().collect{ [(it.cellTypeEnum in  [CellType.NUMERIC]) ? it.numericCellValue.toString() : it.stringCellValue, it.address.column] }
+     }]
+  }
+}
+
+def to_map(dataset) {
+    def (header, matrix) = dataset
+    matrix.collect {
+      it.collectEntries{ val, idx -> [header[idx], val] }
+    }
+}
+def kpi_ly(kpi_date)  { 
+  def (kpi, date) = kpi_date.split("_", 2) 
+  kpi + "_Dec" + use (TimeCategory) { (Date.parse( 'MMMyy', date) - 12.month).format('yy') }
+}
+def kpi_pp(kpi_date) { 
+  def (kpi, date) = kpi_date.split("_", 2) 
+  kpi + "_" + use (TimeCategory) { (Date.parse( 'MMMyy', date) - 1.month).format('MMMyy') }
+}
+def lookup_cols(datamap) {
+    datamap.collect {row ->
+      row.collectEntries {k, v ->
+        k in ['bottler_cn', 'bottler_en'] ? [k,v] : [k, [v, v - (row[kpi_pp(k)] ?: 0), v - (row[kpi_ly(k)] ?: 0)]]
       }
-    }.inject([]){merge, item -> merge + item}
+    }
+}
+def explode_cols(datamap, bottler_group) { 
+  def botter_group_mapping = bottler_group.collectMany{it.value.collect{a_value-> [a_value, it.key]}}.collectEntries{it}
+  datamap.collectMany { 
+    def (bottler, channel) = it['bottler_en'].split("_", 2)
+    it.findAll{!(it.key in ['bottler_cn', 'bottler_en'])}.collect {k, v ->
+      def (kpi, date) = k.split("_", 2)
+      [Date.parse( 'MMMyy', date).format('YYYY-MM'), botter_group_mapping[bottler], bottler, channel, kpi, *v]
+    }
   }
 }
 
-def split_cols(dataset) { 
-  dataset.collect { bottler_channel, kpi_date, score ->
-    def (bottler, channel) = bottler_channel.split("_", 2)
-    def (kpi, date) = kpi_date.split("_")
-    [Date.parse( 'MMMyy', date ).format('YYYY-MM') , bottler, channel, kpi, score] 
-  }
+def cal_expr(dataset, exprs) {
+    def ret = [:]
+    dataset.each {row -> 
+        // println("row:" + row)
+        exprs.each {
+            if(it['dimension'].grep{it[0][0] != ':'}.every{ row[it[1]] == it[0] }) {
+                def rpt_category =  it['dimension'].grep{it[0][0] == ':'}
+                def filter_val = it['filter'].collect{row[it[1]]}
+                def dimension_val = it['dimension'].grep{it[0][0] == ':'}.collectEntries{[it[0].drop(1), row[it[1]]]}
+                def metrics_val = it['metrics'].collectEntries{[it[0].drop(1), row[it[1]]]}
+
+                def filter_map = [(filter_val): (ret?.get(rpt_category)?.get(filter_val) ?: []) + [[dimension: dimension_val, metrics_val: metrics_val]]]
+                def category_map = [(rpt_category): (ret?.get(rpt_category) ?: [:]) + filter_map]
+                ret += category_map
+            }
+        }
+    }
+    ret
 }
 
-def cal_expr(dataset) {
-    dataset
+def to_mysql(category_map) {
+  category_map.take(2).each {category_name, category_val ->
+    category_val.each {filter_name, filter_val ->
+      println([category_name: toJson(category_name), filter_name: toJson(filter_name), json: toJson(filter_val) ])
+    }
+  }
 }
 
 def cocacola_xls = "/home/spiderdt/work/git/spiderdt-working/larluo/score.xlsm"
-cocacola_xls.with{ parse_xls(it, "score") }.with{ split_cols(it) }.with{ cal_expr(it) }.take(10).each{println(it)}
+
+// date, bottler_group, bottler, channel, kpi, score, score_pp, score_lp
+def exprs = [ //[filter : [[":date", 0], [":bottler_group", 1], [":bottler", 2]], dimension : [["Total", 3], ["Total", 4]], metrics : [[":score", 5], [":score_pp", 6], [":score_lp", 7]]],
+              [filter : [[":date", 0], [":bottler_group", 1], [":bottler", 2]], dimension : [[":channel", 3], ["Total", 4]], metrics : [[":score", 5]]], 
+              //[filter : [[":date", 0], [":bottler_group", 1], [":bottler", 2]], dimension : [["Total", 3], [":kpi", 4]], metrics : [[":score", 5]]], 
+              //[filter : [[":date", 0], [":bottler_group", 1], [":bottler", 2]], dimension : [[":channel", 3], ["Total", 4], [":bottler", 2]], metrics : [[":score", 5]]], 
+              //[filter : [[":date", 0], [":bottler_group", 1], [":bottler", 2]], dimension : [["Total", 3], [":kpi", 4], [":bottler", 2]], metrics : [[":score", 5]]] 
+            ]
+def bottler_group = [China : ['China'],
+                     BIG: ['BIG','LNS','GX','YN','Shanxi','LNN','SH','HB','SC','CQ','HLJ','JL'],
+                     CBL: ['CBL','HaiN','BJ','ZM','SD','HeB','JX','TJ','HuN','InnM','GS','XJ'],
+                     SBL: ['SBL','AH','ZJ','FJ','Shaanxi','HeN','JS','GDW','GDE'],
+                     Zhuhai: ['ZH']
+                    ]
+cocacola_xls.with{ parse_xls(it, "score") }
+            .with{ to_map(it) }
+            .with{ lookup_cols(it) }
+            .with{ explode_cols(it, bottler_group) }
+            .with{ cal_expr(it, exprs) }
+            .with{ to_mysql(it) }
