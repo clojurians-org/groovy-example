@@ -1,0 +1,8 @@
+import cocacola.api.Report
+
+model {
+	Iterable<Report> reportList
+}
+
+json tmpl.report(reportList ?: [])
+

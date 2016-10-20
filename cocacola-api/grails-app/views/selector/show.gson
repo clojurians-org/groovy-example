@@ -1,0 +1,7 @@
+import cocacola.api.Selector
+
+model {
+	Selector selector
+}
+
+json tmpl.selector(selector)

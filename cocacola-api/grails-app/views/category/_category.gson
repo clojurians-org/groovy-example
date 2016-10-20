@@ -1,0 +1,7 @@
+import cocacola.api.Category
+
+model {
+	Category category
+}
+
+json g.render(category)

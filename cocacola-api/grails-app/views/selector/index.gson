@@ -1,0 +1,8 @@
+import cocacola.api.Selector
+
+model {
+	Iterable<Selector> selectorList
+}
+
+json tmpl.selector(selectorList ?: [])
+

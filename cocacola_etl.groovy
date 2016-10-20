@@ -66,14 +66,14 @@ def cal_expr(dataset, exprs) {
         // println("row:" + row)
         exprs.each {
             if(it['dimension'].grep{it[0][0] != ':'}.every{ row[it[1]] == it[0] }) {
-                def rpt_category =  it['dimension'].grep{it[0][0] == ':'}.collect{[it[0].drop(1), it[1]]}
-                def filter_val = it['filter'].collect{[it[0].drop(1), row[it[1]]]}
+                def rpt_seg =  it['dimension'].grep{it[0][0] == ':'}.collect{[it[0].drop(1), it[1]]}
+                def selector_val = it['selector'].collect{[it[0].drop(1), row[it[1]]]}
                 def dimension_val = it['dimension'].grep{it[0][0] == ':'}.collect{[it[0].drop(1), row[it[1]]]}
                 def metrics_val = it['metrics'].collectEntries{[it[0].drop(1), row[it[1]]]}
 
-                def filter_map = [(filter_val): (ret?.get(rpt_category)?.get(filter_val) ?: []) + [[dimension: dimension_val, metrics_val: metrics_val]]]
-                def category_map = [(rpt_category): (ret?.get(rpt_category) ?: [:]) + filter_map]
-                ret += category_map
+                def selector_map = [(selector_val): (ret?.get(rpt_seg)?.get(selector_val) ?: []) + [[dimension: dimension_val, metrics_val: metrics_val]]]
+                def seg_map = [(rpt_seg): (ret?.get(rpt_seg) ?: [:]) + selector_map]
+                ret += seg_map
             }
         }
     }
@@ -90,19 +90,18 @@ def to_mysql(category_map, mysql_info) {
   println("[info] writing to mysql...")
   def sql = Sql.newInstance(mysql_info)
   sql.execute """CREATE TABLE IF NOT EXISTS cocacola_rpt ( 
-                   name VARCHAR(64), 
-                   category VARCHAR(256), 
-                   filter VARCHAR(512), 
+                   category VARCHAR(64), 
+                   report VARCHAR(256), 
+                   selector VARCHAR(512), 
                    data VARCHAR(10000),
-                   CONSTRAINT pk_rpt PRIMARY KEY(name, category, filter)
+                   CONSTRAINT pk_rpt PRIMARY KEY(category, report , selector)
                  ) ;"""
 
-  sql.withBatch(100, "REPLACE INTO cocacola_rpt(name, category, filter, data) VALUES('score', ?, ?, ?)") {
-    category_map.each {category, filter_map->
-      filter_map.each {filter, data ->
+  sql.withBatch(1000, "REPLACE INTO cocacola_rpt(category, report, selector, data) VALUES('score', ?, ?, ?)") {
+    category_map.each {rpt_seg, selector_map->
+      selector_map.each {selector, data ->
         def tree_data = tree(data.collect{it.dimension + it.metrics_val})
-        println("insert:" + [category: category, filter: filter, data: tree_data])
-        it.addBatch(toJson(category), toJson(filter), toJson(tree_data)) 
+        it.addBatch(rpt_seg*.get(0).join("_") ?: "overall", toJson(selector), toJson(tree_data)) 
       }
     }
   }
@@ -111,19 +110,19 @@ def to_mysql(category_map, mysql_info) {
 def cocacola_xls = "/home/spiderdt/work/git/spiderdt-working/larluo/score.xlsm"
 
 // date, bottler_group, bottler, channel, kpi, score, score_pp, score_lp
-def exprs = [ [filter : [[":date", 0], [":bottler_group", 1], [":bottler", 2]], 
+def exprs = [ [selector : [[":date", 0], [":bottler_group", 1], [":bottler", 2]], 
                dimension : [["Total", 3], ["Total", 4]], 
                metrics : [[":score", 5], [":score_pp", 6], [":score_lp", 7]]],
-              [filter : [[":date", 0], [":bottler_group", 1], [":bottler", 2]], 
+              [selector : [[":date", 0], [":bottler_group", 1], [":bottler", 2]], 
                dimension : [[":channel", 3], ["Total", 4]], 
                metrics : [[":score", 5]]], 
-              [filter : [[":date", 0], [":bottler_group", 1], [":bottler", 2]], 
+              [selector : [[":date", 0], [":bottler_group", 1], [":bottler", 2]], 
                dimension : [["Total", 3], [":kpi", 4]], 
                metrics : [[":score", 5]]], 
-              [filter : [[":date", 0], [":bottler_group", 1], [":bottler", 2]], 
+              [selector : [[":date", 0], [":bottler_group", 1], [":bottler", 2]], 
                dimension : [[":channel", 3], ["Total", 4], [":bottler", 2]], 
                metrics : [[":score", 5]]], 
-              [filter : [[":date", 0], [":bottler_group", 1], [":bottler", 2]], 
+              [selector : [[":date", 0], [":bottler_group", 1], [":bottler", 2]], 
                dimension : [["Total", 3], [":kpi", 4], [":bottler", 2]], 
                metrics : [[":score", 5]]] 
             ]

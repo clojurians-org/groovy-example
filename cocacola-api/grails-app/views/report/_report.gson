@@ -1,0 +1,7 @@
+import cocacola.api.Report
+
+model {
+	Report report
+}
+
+json g.render(report)
