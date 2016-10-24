@@ -52,7 +52,9 @@ class ChronosService {
         }
     }
     def createNowPeriodJob(projectId, categoryId, name, hms, command) {
-        createJob(projectId, categoryId, name, [command: command, schedule: "R//PT${hms}".toString()])
+        TimeZone.setDefault(TimeZone.getTimeZone('UTC'))
+        def after_1m = use (groovy.time.TimeCategory) { (new Date() + 1.minute).format("yyyy-MM-dd'T'HH:mm:ss'Z'") }
+        createJob(projectId, categoryId, name, [command: command, schedule: "R/${after_1m}/PT${hms}".toString()])
     }
     def createOnetimeJob(projectId, categoryId, name, command, schedule) {
     }
