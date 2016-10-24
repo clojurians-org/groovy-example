@@ -1,0 +1,7 @@
+import scheduler.api.Project
+
+model {
+	Project project
+}
+
+json tmpl.project(project)
