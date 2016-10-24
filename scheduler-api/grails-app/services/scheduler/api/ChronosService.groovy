@@ -32,8 +32,10 @@ class ChronosService {
     }
 
     def getCategories(projectId) {
+        graph_node().findAll{it.startsWith(projectId + "-")}.collect{it.split("-")[1]}.unique()
     }
 
-    def getJobs(String projectId, String categoryId) {
+    def getJobs(projectId, categoryId) {
+         graph_node().findAll{it.startsWith(projectId + "-" + categoryId + "-")}.collect{it.split("-", 3)[2]}.unique()
     }
 }
