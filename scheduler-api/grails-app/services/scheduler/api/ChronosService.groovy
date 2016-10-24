@@ -38,4 +38,24 @@ class ChronosService {
     def getJobs(projectId, categoryId) {
          graph_node().findAll{it.startsWith(projectId + "-" + categoryId + "-")}.collect{it.split("-", 3)[2]}.unique()
     }
+
+    def createJob(projectId, categoryId, name, params) {
+        http.request(POST,JSON){req ->
+            uri.path = '/scheduler/iso8601'
+            body = [name: "${projectId}-${categoryId}-${name}".toString()] + params
+        }
+    }
+    def createNowOnetimeJob(projectId, categoryId, name, command) {
+        createJob(projectId, categoryId, name, [command: command, schedule: "R/9999-99-99T00:00:00Z/P"])
+        http.request(PUT,JSON){req ->
+            uri.path = "/scheduler/job/${projectId}-${categoryId}-${name}".toString()
+        }
+    }
+    def createNowPeriodJob(projectId, categoryId, name, hms, command) {
+        createJob(projectId, categoryId, name, [command: command, schedule: "R//PT${hms}".toString()])
+    }
+    def createOnetimeJob(projectId, categoryId, name, command, schedule) {
+    }
+    def createPeriodJob(projectId, categoryId, name, command, schedule) {
+    }
 }

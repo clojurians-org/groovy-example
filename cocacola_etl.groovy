@@ -100,7 +100,7 @@ def to_mysql(category_map, mysql_info) {
   sql.withBatch(1000, "REPLACE INTO cocacola_rpt(category, report, selector, data) VALUES('score', ?, ?, ?)") {
     category_map.each {rpt_seg, selector_map->
       selector_map.each {selector, data ->
-        def tree_data = tree(data.collect{it.dimension + it.metrics_val})
+        def tree_data = tree(data.collect{(it.dimension*.join("=") + it.metrics_val)})
         it.addBatch(rpt_seg*.get(0).join("_") ?: "overall", toJson(selector), toJson(tree_data)) 
       }
     }
