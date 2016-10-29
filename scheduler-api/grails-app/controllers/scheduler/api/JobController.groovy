@@ -35,4 +35,8 @@ class JobController {
         }
         render toJson(job.properties + [projectId: projectId, categoryId:categoryId, id: job.name])
     }
+    def show(Job job) {
+        println("show running...")
+        render toJson(chronosService.queryJob(params.ppid, params.pid, params.id))
+    }
 }

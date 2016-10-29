@@ -31,12 +31,16 @@ dependencyManagement {
     applyMavenExclusions false
 }
 
+ext['tomcat.version'] = '7.0.59'
+
 dependencies {
     compile "org.springframework.boot:spring-boot-starter-logging"
     compile "org.springframework.boot:spring-boot-autoconfigure"
     compile "org.grails:grails-core"
     compile "org.springframework.boot:spring-boot-starter-actuator"
-    compile "org.springframework.boot:spring-boot-starter-tomcat"
+    // compile "org.springframework.boot:spring-boot-starter-tomcat"
+    provided "org.springframework.boot:spring-boot-starter-tomcat"
+
     compile "org.grails:grails-plugin-url-mappings"
     compile "org.grails:grails-plugin-rest"
     compile "org.grails:grails-plugin-codecs"
@@ -56,7 +60,7 @@ dependencies {
     compile "org.codehaus.groovy.modules.http-builder:http-builder:0.7.2"
     console "org.grails:grails-console"
     profile "org.grails.profiles:rest-api"
-    provided "org.codehaus.groovy:groovy-ant"
+    // provided "org.codehaus.groovy:groovy-ant"
     runtime "com.h2database:h2"
     testCompile "org.grails:grails-plugin-testing"
     testCompile "org.grails.plugins:geb"
