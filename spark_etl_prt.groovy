@@ -124,7 +124,6 @@ SparkSubmit.main(
     ["--master", "yarn", 
      "--deploy-mode", "client", 
      "--class", "Client",
-     "--jars", "/home/spiderdt/work/git/spiderdt-release/data-platform/target/groovy-all-2.4.7.jar",
      "--executor-memory", "2g",
      jar_path,
      tabname, prt_cols_str
@@ -182,7 +181,9 @@ class Client {
                 ["spark.app.name":"spark-etl.prt",
                  "spark.hadoop.mapreduce.input.fileinputformat.input.dir.recursive": "true",
                  "spark.hadoop.yarn.resourcemanager.hostname": "192.168.1.3",
-                 "spark.hadoop.fs.defaultFS": default_fs]
+                 "spark.hadoop.fs.defaultFS": default_fs,
+                 "spark.yarn.archive": default_fs + "/user/spiderdt/spark_yarn_archive"
+                ]
             ))
         it}
     )

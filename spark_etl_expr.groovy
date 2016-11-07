@@ -137,7 +137,6 @@ SparkSubmit.main(
     ["--master", "yarn", 
      "--deploy-mode", "client", 
      "--class", "Client",
-     "--jars", "/home/spiderdt/work/git/spiderdt-release/data-platform/target/groovy-all-2.4.7.jar",
      "--executor-memory", "4g",
      jar_path,
      tabs_str, tab_cols_str, exprs_str
@@ -193,10 +192,12 @@ class Client {
     def sc = new JavaSparkContext (
         new SparkConf().with {
             it.setAll(JavaConversions.mapAsScalaMap(
-                ["spark.app.name":"spark-etl.prt",
+                ["spark.app.name":"spark-etl.expr",
                  "spark.hadoop.mapreduce.input.fileinputformat.input.dir.recursive": "true",
                  "spark.hadoop.yarn.resourcemanager.hostname": "192.168.1.3",
-                 "spark.hadoop.fs.defaultFS": default_fs]
+                 "spark.hadoop.fs.defaultFS": default_fs
+                 "spark.yarn.archive": default_fs + "/user/spiderdt/spark_yarn_archive"
+                ]
             ))
         it}
     )
