@@ -78,6 +78,9 @@ def exprs_str = """[[":is_copon_discount", ":copon_discount_amount == 0"],
                     [":is_system_discount", ":system_discount_amount == 0.0"],
                     [":is_discount", ":is_copon_discount || :is_system_discount"]]"""
 
+def client_jar_path = "/home/spiderdt/work/git/spiderdt-release/var/jar/${getClass().getName()}.jar".toString()
+def client_args  =  [tabs_str, tab_cols_str, exprs_str, client_jar_path]
+
 /**********************************
  * LOG INITIALIZATION
  **********************************/
@@ -88,13 +91,6 @@ log.root.with {
     it.level = Level.INFO
     it.removeAllAppenders()
     log.root.addAppender(new ConsoleAppender(new PatternLayout("%d{yy/MM/dd HH:mm:ss} %p %c{1}: %m%n")))
-    log.root.addAppender(
-      new DailyRollingFileAppender(
-        new PatternLayout("%d{yy/MM/dd HH:mm:ss} %p %c{1}: %m%n"), 
-        "/home/spiderdt/work/git/spiderdt-release/var/log/${job_id}.log",
-        "'.'yyyy-MM-dd"
-      )
-    )
 }
 3.times {log.info ""}
 
@@ -111,7 +107,6 @@ class MyGroovyClassLoader extends GroovyClassLoader {
 /**********************************
  * PACKAGE JAR AND SUBMIT
  **********************************/
-def jar_path = "/home/spiderdt/work/git/spiderdt-release/var/jar/${getClass().getName()}.jar"
 new MyGroovyClassLoader().with {
     def bos = new ByteArrayOutputStream()
     def jar = new JarOutputStream(bos)
@@ -129,18 +124,10 @@ new MyGroovyClassLoader().with {
         jar.write(it.bytes)
     }
     jar.close()
-    new File(jar_path).bytes = bos.toByteArray()
+    new File(client_jar_path).bytes = bos.toByteArray()
     bos.close()
 }
 
-SparkSubmit.main(
-    ["--master", "yarn", 
-     "--deploy-mode", "client", 
-     "--class", "Client",
-     "--executor-memory", "4g",
-     jar_path,
-     tabs_str, tab_cols_str, exprs_str
-    ] as String[])
 
 /**********************************
  * SPARK CODE
@@ -180,9 +167,9 @@ class Client {
       execute_hive_statement(hive_info, ddl_sql)
   }
 
-  static main(args) {
+  static run(args) {
     // 1. PARSE PARAMETER
-    def (tabs_str, tab_cols_str, exprs_str) = args
+    def (tabs_str, tab_cols_str, exprs_str, client_jar_path) = args
     def (src_tab_subdir, tgt_tab_subdir) = Eval.me(tabs_str).collect{ it.split("\\.").with { [it[0] + ".db", *it.drop(1)] }.join("/") }
     def (tab_cols, exprs) = [Eval.me(tab_cols_str), Eval.me(exprs_str)]
     def (default_fs, username, uuid, hive_info, hive_dir) = ["hdfs://192.168.1.3:9000", System.getProperty("user.name"), UUID.randomUUID(), [hostname: "192.168.1.2"], "user/hive/warehouse"]
@@ -192,10 +179,13 @@ class Client {
     def sc = new JavaSparkContext (
         new SparkConf().with {
             it.setAll(JavaConversions.mapAsScalaMap(
-                ["spark.app.name":"spark-etl.expr",
+                ["spark.app.name": "spark-etl.stat",
+                 "spark.master": "yarn",
+                 "spark.executor.memory": "4g",
                  "spark.hadoop.mapreduce.input.fileinputformat.input.dir.recursive": "true",
                  "spark.hadoop.yarn.resourcemanager.hostname": "192.168.1.3",
-                 "spark.hadoop.fs.defaultFS": default_fs
+                 "spark.hadoop.fs.defaultFS": default_fs,
+                 "spark.yarn.jars": client_jar_path,
                  "spark.yarn.archive": default_fs + "/user/spiderdt/spark_yarn_archive"
                 ]
             ))
@@ -242,3 +232,4 @@ class Client {
     dfs_client.delete("/user/${username}/${uuid}")
   }
 }
+Client.run(client_args)
