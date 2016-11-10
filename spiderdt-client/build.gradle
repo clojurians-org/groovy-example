@@ -1,0 +1,45 @@
+buildscript {
+    repositories {
+        mavenLocal()
+        maven { url "https://repo.grails.org/grails/core" }
+    }
+    dependencies {
+        classpath "gradle.plugin.org.jruyi.gradle:thrift-gradle-plugin:0.3.2"
+        classpath 'com.google.protobuf:protobuf-gradle-plugin:0.8.0'
+    }
+
+}
+
+apply plugin: "java"
+apply plugin: "groovy"
+apply plugin: "org.jruyi.thrift"
+apply plugin: 'com.google.protobuf'
+apply plugin: "maven-publish"
+
+version "0.1"
+group = "com.spiderdt.framework"
+archivesBaseName = "spiderdt-client"
+
+repositories {
+    mavenLocal()
+    maven { url "https://repo.grails.org/grails/core" }
+}
+
+
+dependencies {
+    compile "org.apache.thrift:libthrift:0.9.3"
+    compile 'com.google.protobuf:protobuf-java:2.5.0'
+    compile 'org.slf4j:slf4j-log4j12:1.7.7'
+    compile 'org.codehaus.groovy:groovy-all:2.4.7'
+}
+
+publishing {
+    publications {
+        mavenJava(MavenPublication) {
+            from components.java
+        }
+    }
+    repositories {
+        mavenLocal()
+    }
+}
