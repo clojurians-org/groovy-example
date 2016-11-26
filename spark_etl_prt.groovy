@@ -54,7 +54,7 @@ def (tabname, prt_cols_str) = args
 def hadoop_master = "192.168.1.3"
 def hive_server2 = "192.168.1.3"
 
-def client_args  =  [job_id: "spark-etl.prt",
+def client_args  =  [job_id: this.class.name,
                      whoami: System.getProperty("user.name"),
                      uuid: UUID.randomUUID(),
                      tabname: tabname, 
@@ -99,8 +99,8 @@ new MyGroovyClassLoader().with {loader ->
 /**********************************
  * SPARK CODE
  **********************************/
-class Client {
-  static log = LoggerFactory.getLogger(Client.class)
+class PrtClient {
+  static log = LoggerFactory.getLogger(PrtClient.class)
   static list_dirs(dfs_client, filepath) {
       dfs_client.listPaths(filepath).getPartialListing().grep{it.dir}*.getFullName(filepath)
   }
@@ -126,7 +126,7 @@ class Client {
     def sc = new JavaSparkContext(
         new SparkConf().each {
             it.setAll(JavaConversions.mapAsScalaMap(
-                ["spark.app.name": [args.job_id, args.tabname, args.uuid].join("-").toString(),
+                ["spark.app.name": [args.job_id, args.tabname].join("-").toString(),
                  "spark.master": "yarn",
                  "spark.yarn.am.memory": "1g",
                  "spark.executor.instances": "1",
@@ -142,14 +142,17 @@ class Client {
     // CREATE SPARK HIVE TABLE
     def stg_header_str = sc.wholeTextFiles("${args.hive_dir}/stg.db/${args.tabname}").map{it._2.split("\n")[0]}.collect().toSet()
     if (stg_header_str.size() != 1) throw new Exception("data header didn't match!")
-    create_hive_tab(args.hive_info, "ods.${args.tabname}", args.prt_cols*.get(0), stg_header_str[0].split(",").toList().withIndex(1).collect{val, idx ->  val ?: "X_${idx}"})
+    create_hive_tab(args.hive_info, "ods.${args.tabname}", spark_args.prt_cols*.get(0), 
+                   ["prt_path", *stg_header_str[0].split(",").toList().withIndex(1).collect{val, idx ->  val ?: "X_${idx}"}])
 
     // MERGE STG DATA TO ODS
     sc.wholeTextFiles(spark_args.in_path)
       .mapPartitions {
         it.collectMany { // PER_PARTITION
-          it._2.split("\n").drop(1).collect{ //PER_ROW
-            it.split(",").with {flds ->  spark_args.prt_cols.collect{[it[0], flds[it[1]]]}*.join("=").join("/").with {[it, [it, *flds].join("\001")]} } 
+          it._2.split("\n").drop(1).collect{row->
+            row.split(",").with {flds ->  spark_args.prt_cols.collect{/*p_key, p_val*/[it[0], flds[it[1]]]}*.join("=").join("/")
+                                          .with { /*prt_path, prt_path + line */ [it, [it, *flds].join("\001")] }
+            }
           }
         }.iterator()
       }.foreachPartition {
@@ -157,7 +160,7 @@ class Client {
         def dfs_client = new DFSClient(new URI(spark_args.dfs_client_info.root), new Configuration())
         it.each {
           // generate output path according to the [partition fields + rdd partition no]
-          def out_path="${spark_args.out_path}/${it[0]}/data.json.${TaskContext.get().partitionId()}".toString()
+          def out_path="${spark_args.out_path}/${it[0]}/data.csv.${TaskContext.get().partitionId()}".toString()
           if(!out_streams[out_path]) out_streams[out_path] = dfs_client.create(out_path, true)
           out_streams[out_path] << it[1].getBytes("UTF-8") << "\n"
         }
@@ -180,4 +183,4 @@ class Client {
     args.dfs_client.delete("/user/${args.whoami}/${args.uuid}")
   }
 }
-Client.run(client_args, spark_args)
+PrtClient.run(client_args, spark_args)
