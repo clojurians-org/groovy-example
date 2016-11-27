@@ -141,37 +141,75 @@ class MergeClient {
     def stg_header_str = sc.wholeTextFiles("${args.hive_dir}/stg.db/${args.tabname}").map{it._2.split("\n")[0]}.collect().toSet()
     if (stg_header_str.size() != 1) throw new Exception("data header didn't match!")
     create_hive_tab(args.hive_info, "ods.${args.tabname}", [], 
-                   ["prt_path", *stg_header_str[0].split(",").toList().withIndex(1).collect{val, idx ->  val ?: "X_${idx}"}])
+                   ["prt_path", "dw_id", *stg_header_str[0].split(",").toList().withIndex(1).collect{val, idx ->  val ?: "X_${idx}"}])
 
-    // MERGE STG DATA TO ODS
+    // FIND MAX SURROGATE ID
+    spark_args.maxOdsId = sc.wholeTextFiles(spark_args.out_path.replaceAll("^/user/${args.whoami}/${args.uuid}", ""))
+                            .mapPartitions {
+                              it.collect{ // PER_FILE
+                                it._2.split("\n").collect{row -> /* surrogate_key */ row.split("\001")[1] }.max()
+                              }.max().iterator()
+                            }.collect().max() ?: 0 as int
+    log.info("maxOdsId: " + spark_args.maxOdsId)
+
+    // JOIN STG ODS
     def stgRdd = sc.wholeTextFiles(spark_args.in_path)
                    .mapPartitions {
-                     it.collectMany { // PER_PARTITION
+                     it.collectMany{ // PER_FILE
                        it._2.split("\n").drop(1).collect{row ->
                          row.split(",").with {flds ->  
-                           [spark_args.merge_cols.collect{/*m_key, m_val*/[it[0], flds[it[1]]]}, 
-                            ["", *flds].join("\001")]  /*empty_prt_path + line */
+                           [spark_args.merge_cols.collect{/*m_key, m_val*/[it[0], flds[it[1]]]}, flds.join("\001")]
                          }.with {new Tuple2(it[0], it[1])}
                        }
                      }.iterator()
                    }
-
+    log.info("stgRddTake: " + stgRdd.take(2))
     def odsRdd  = sc.wholeTextFiles(spark_args.out_path.replaceAll("^/user/${args.whoami}/${args.uuid}", ""))
                    .mapPartitions {
-                     it.collectMany { // PER_PARTITION
+                     it.collectMany { // PER_FILE
                        it._2.split("\n").collect{row ->
                          row.split("\001").with { flds ->  
-                           [spark_args.merge_cols.collect{/*m_key, m_val*/[it[0], flds[it[1]+1]]}, row]  /*empty_prt_path + line */
+                           [spark_args.merge_cols.collect{/*m_key, m_val*/[it[0], flds[it[1]+2]]}, row]  /*empty_prt_path + surrogate_key, line */
                          }.with {new Tuple2(it[0], it[1])}
                        }
                      }.iterator()
                    }
+    log.info("odsRddTake: " + odsRdd.take(2))
+    def fullRdd = JavaPairRDD.fromJavaRDD(stgRdd).fullOuterJoin(JavaPairRDD.fromJavaRDD(odsRdd)).cache()
+    log.info("fullRddcOUNT: " + fullRdd.count())
+    def existRdd= fullRdd.mapPartitions { 
+                    it.findAll{it._2._2.orNull()}
+                      .collect{it._2._1.orNull() ?: it._2._2.orNull()}.collect{[/*empty_prt_key*/"", it]}.iterator() 
+                  }
+    log.info("existRddPrtCount: " + existRdd.count())
+    log.info("existRddPrtTake: " + existRdd.take(2))
+    def newRdd = fullRdd.mapPartitions { it.findAll{!it._2._2.orNull()}.collect{it._2._1.orNull()}.iterator() }.cache()
+    log.info("newRddPrtTake: " + newRdd.take(2))
 
-    JavaPairRDD.fromJavaRDD(stgRdd).fullOuterJoin(JavaPairRDD.fromJavaRDD(odsRdd)).map{
-      it._2._1.orNull() ?: it._2._2.orNull()
-    }.saveAsTextFile(spark_args.out_path)
+    // CALCULATE SURROGATE KEY FOR NEW RDD DATA
+    spark_args.newRddPrtCount = newRdd.mapPartitions { [[(TaskContext.get().partitionId()): it.size()]].iterator() }.collect().collectEntries{it}
+    log.info("newRddPrtCount: " + spark_args.newRddPrtCount.toString())
 
-    // PERSIST DATA
+    // WRITE TO HDFS
+    newRdd.mapPartitions{
+      it.withIndex(1).collect {row, idx ->
+        def surrogate_key = spark_args.maxOdsId + (spark_args.newRddPrtCount.findAll{it.key < TaskContext.get().partitionId()}*.value.sum() ?: 0) + idx
+        [/*empty_prt_key*/"", ["", surrogate_key, row].join("\001")] /*empty_prt_path + surrogate_key, line */
+      }.iterator()
+    }.union(existRdd).foreachPartition {
+        def out_streams  = [:]
+        def dfs_client = new DFSClient(new URI(spark_args.dfs_client_info.root), new Configuration())
+        it.each {row ->
+          // generate output path according to the [partition fields + rdd partition no]
+          def out_path="${spark_args.out_path}/${row[0]}/data.csv.${TaskContext.get().partitionId()}".replace("//", "/").toString()
+          if(!out_streams[out_path]) out_streams[out_path] = dfs_client.create(out_path, true)
+          out_streams[out_path] << row[1].getBytes("UTF-8") << "\n"
+        }
+        out_streams.values()*.close()
+      }
+
+
+    // PERSIST RESULT
     list_leaf_dirs(args.dfs_client, spark_args.out_path).each {
         def tgt_path=it.replaceAll("^/user/${args.whoami}/${args.uuid}", "")
         log.info "persist to directory: ${tgt_path}"

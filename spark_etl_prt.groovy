@@ -147,9 +147,9 @@ class PrtClient {
 
     // MERGE STG DATA TO ODS
     sc.wholeTextFiles(spark_args.in_path)
-      .mapPartitions {
-        it.collectMany { // PER_PARTITION
-          it._2.split("\n").drop(1).collect{row->
+      .mapPartitions { 
+        it.collectMany { // (PER_FILE_NAME, PER_FILE_TEXT)
+          it._2.split("\n").drop(1).collect {row->
             row.split(",").with {flds ->  spark_args.prt_cols.collect{/*p_key, p_val*/[it[0], flds[it[1]]]}*.join("=").join("/")
                                           .with { /*prt_path, prt_path + line */ [it, [it, *flds].join("\001")] }
             }
@@ -158,11 +158,11 @@ class PrtClient {
       }.foreachPartition {
         def out_streams  = [:]
         def dfs_client = new DFSClient(new URI(spark_args.dfs_client_info.root), new Configuration())
-        it.each {
+        it.each {row ->
           // generate output path according to the [partition fields + rdd partition no]
-          def out_path="${spark_args.out_path}/${it[0]}/data.csv.${TaskContext.get().partitionId()}".toString()
+          def out_path="${spark_args.out_path}/${row[0]}/data.csv.${TaskContext.get().partitionId()}".toString()
           if(!out_streams[out_path]) out_streams[out_path] = dfs_client.create(out_path, true)
-          out_streams[out_path] << it[1].getBytes("UTF-8") << "\n"
+          out_streams[out_path] << row[1].getBytes("UTF-8") << "\n"
         }
         out_streams.values()*.close()
       }
