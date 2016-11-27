@@ -151,7 +151,7 @@ class PrtClient {
         it.collectMany { // (PER_FILE_NAME, PER_FILE_TEXT)
           it._2.split("\n").drop(1).collect {row->
             row.split(",").with {flds ->  spark_args.prt_cols.collect{/*p_key, p_val*/[it[0], flds[it[1]]]}*.join("=").join("/")
-                                          .with { /*prt_path, prt_path + line */ [it, [it, *flds].join("\001")] }
+                                          .with { /*prt_path, line */ [it, flds.join("\001")] }
             }
           }
         }.iterator()
@@ -160,9 +160,9 @@ class PrtClient {
         def dfs_client = new DFSClient(new URI(spark_args.dfs_client_info.root), new Configuration())
         it.each {row ->
           // generate output path according to the [partition fields + rdd partition no]
-          def out_path="${spark_args.out_path}/${row[0]}/data.csv.${TaskContext.get().partitionId()}".toString()
+          def out_path="${spark_args.out_path}/${row[0]}/data.csv.${TaskContext.get().partitionId()}".replace("//", "/").toString()
           if(!out_streams[out_path]) out_streams[out_path] = dfs_client.create(out_path, true)
-          out_streams[out_path] << row[1].getBytes("UTF-8") << "\n"
+          out_streams[out_path] << row.join("\001").getBytes("UTF-8") << "\n"
         }
         out_streams.values()*.close()
       }

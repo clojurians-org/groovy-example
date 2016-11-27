@@ -163,50 +163,47 @@ class MergeClient {
                        }
                      }.iterator()
                    }
-    log.info("stgRddTake: " + stgRdd.take(2))
     def odsRdd  = sc.wholeTextFiles(spark_args.out_path.replaceAll("^/user/${args.whoami}/${args.uuid}", ""))
                    .mapPartitions {
                      it.collectMany { // PER_FILE
-                       it._2.split("\n").collect{row ->
+                       it._2.split("\n").collect{ row ->
                          row.split("\001").with { flds ->  
-                           [spark_args.merge_cols.collect{/*m_key, m_val*/[it[0], flds[it[1]+2]]}, row]  /*empty_prt_path + surrogate_key, line */
+                           [spark_args.merge_cols.collect{/*m_key, m_val*/[it[0], flds[it[1]+2]]}, row] /*empty_prt_path + surrogate_key, line */
                          }.with {new Tuple2(it[0], it[1])}
                        }
                      }.iterator()
                    }
-    log.info("odsRddTake: " + odsRdd.take(2))
     def fullRdd = JavaPairRDD.fromJavaRDD(stgRdd).fullOuterJoin(JavaPairRDD.fromJavaRDD(odsRdd)).cache()
-    log.info("fullRddcOUNT: " + fullRdd.count())
     def existRdd= fullRdd.mapPartitions { 
                     it.findAll{it._2._2.orNull()}
-                      .collect{it._2._1.orNull() ?: it._2._2.orNull()}.collect{[/*empty_prt_key*/"", it]}.iterator() 
+                      .collect{[/*empty_prt_key*/"", 
+                               it._2._1.orNull() ? 
+                                 [/* surrogate_key */it._2._2.orNull().split("\001")[1], it._2._1.orNull()].join("\001") :
+                                 it._2._2.orNull()]
+                      }.iterator() 
                   }
-    log.info("existRddPrtCount: " + existRdd.count())
-    log.info("existRddPrtTake: " + existRdd.take(2))
     def newRdd = fullRdd.mapPartitions { it.findAll{!it._2._2.orNull()}.collect{it._2._1.orNull()}.iterator() }.cache()
-    log.info("newRddPrtTake: " + newRdd.take(2))
 
     // CALCULATE SURROGATE KEY FOR NEW RDD DATA
     spark_args.newRddPrtCount = newRdd.mapPartitions { [[(TaskContext.get().partitionId()): it.size()]].iterator() }.collect().collectEntries{it}
-    log.info("newRddPrtCount: " + spark_args.newRddPrtCount.toString())
 
     // WRITE TO HDFS
     newRdd.mapPartitions{
       it.withIndex(1).collect {row, idx ->
         def surrogate_key = spark_args.maxOdsId + (spark_args.newRddPrtCount.findAll{it.key < TaskContext.get().partitionId()}*.value.sum() ?: 0) + idx
-        [/*empty_prt_key*/"", ["", surrogate_key, row].join("\001")] /*empty_prt_path + surrogate_key, line */
+        [/*empty_prt_key*/"", [surrogate_key, row].join("\001")] /*empty_prt_path + surrogate_key, line */
       }.iterator()
     }.union(existRdd).foreachPartition {
-        def out_streams  = [:]
-        def dfs_client = new DFSClient(new URI(spark_args.dfs_client_info.root), new Configuration())
-        it.each {row ->
-          // generate output path according to the [partition fields + rdd partition no]
-          def out_path="${spark_args.out_path}/${row[0]}/data.csv.${TaskContext.get().partitionId()}".replace("//", "/").toString()
-          if(!out_streams[out_path]) out_streams[out_path] = dfs_client.create(out_path, true)
-          out_streams[out_path] << row[1].getBytes("UTF-8") << "\n"
-        }
-        out_streams.values()*.close()
+      def out_streams  = [:]
+      def dfs_client = new DFSClient(new URI(spark_args.dfs_client_info.root), new Configuration())
+      it.each {row ->
+        // generate output path according to the [partition fields + rdd partition no]
+        def out_path="${spark_args.out_path}/${row[0]}/data.csv.${TaskContext.get().partitionId()}".replace("//", "/").toString()
+        if(!out_streams[out_path]) out_streams[out_path] = dfs_client.create(out_path, true)
+        out_streams[out_path] << row.join("\001").getBytes("UTF-8") << "\n"
       }
+      out_streams.values()*.close()
+    }
 
 
     // PERSIST RESULT
